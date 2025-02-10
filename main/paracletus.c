@@ -33,7 +33,8 @@ static void nmea_parser_start_gps_uart(void);
 static void uart_data_income(void *);
 
 // GPS
-esp_err_t get_nmea_sentence(const char *buffer, char *nmea_sentence);
+bool get_nmea_sentence(const char *buffer, char *nmea_sentence);
+bool valid_sentence_code(const char *nmea_sentence);
 
 void app_main(void)
 {
@@ -71,8 +72,8 @@ static void uart_data_income(void *arg) {
 			uint8_t len = uart_read_bytes(0, (char *) data, data_length, 100);
 
 			if(len) {
-				esp_err_t ret = get_nmea_sentence((const char *) data, gps_sentence);
-				if(ret == ESP_OK) {
+				bool ret = get_nmea_sentence((const char *) data, gps_sentence);
+				if(ret == true) {
 					printf("(%s)\n", gps_sentence);
 				}
 
@@ -110,7 +111,7 @@ void fill_buffer(const char *buffer, char *nmea_sentence, uint8_t begin, uint8_t
 	nmea_sentence[end + 3] = '\0';
 }
 
-esp_err_t get_nmea_sentence(const char *buffer, char *nmea_sentence) {
+bool get_nmea_sentence(const char *buffer, char *nmea_sentence) {
 
 	// procura pelo cifrão
 	uint8_t dollar_sign_pos = 0;
@@ -122,10 +123,34 @@ esp_err_t get_nmea_sentence(const char *buffer, char *nmea_sentence) {
 
 	// se na sentença não tiver dados ou delimitador de início/fim, ignora a linha
 	if(asterisk_pos <= dollar_sign_pos) {
-		return ESP_FAIL;
+		return false;
 	}
 
 	fill_buffer(buffer, nmea_sentence, dollar_sign_pos, asterisk_pos);
 
-	return ESP_OK;
+	if(valid_sentence_code(nmea_sentence) == true) {
+		return true;
+	}
+
+	return false;
+}
+
+bool valid_sentence_code(const char *nmea_sentence) {
+  char msg_tag[6] = { 0 };
+
+  for (uint8_t i = 1; i <= 5; i++) {
+    msg_tag[i - 1] = nmea_sentence[i];
+  }
+
+  const char valid_tags[6][6] = {
+    "GNGGA", "GPGGA", "GNRMC", "GPRMC", "GPGLL", "GPZDA"
+  };
+
+  for (uint8_t i = 0; i < 4; i++) {
+    if (strncmp(valid_tags[i], msg_tag, 6) == 0) {
+		 return true;
+    }
+  }
+
+  return false;
 }
