@@ -61,7 +61,8 @@ static void uart_data_income(void *arg) {
 	while(1) {
 		uart_get_buffered_data_len(0, (size_t *) &data_length);
 
-		if(data_length >= 10) {
+		// em média as linhas válidas possuem ~40 caracteres
+		if(data_length >= 40) {
 			uint8_t len = uart_read_bytes(0, (char *) data, data_length, 100);
 
 			if(len) {
