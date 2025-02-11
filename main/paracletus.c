@@ -28,6 +28,17 @@ typedef struct {
 	gps_time_t time;
 } gps_t;
 
+typedef struct {
+	char time_stamp[16];
+	char validity[4];
+	char latitude[16];
+	char lat_direction[4];
+	char longitude[16];
+	char lng_direction[4];
+	char date_stamp[16];
+	char checksum[4];
+} raw_sentence_data_t;
+
 // UART
 static void nmea_parser_start_gps_uart(void);
 static void uart_data_income(void *);
@@ -35,6 +46,7 @@ static void uart_data_income(void *);
 // GPS
 bool get_nmea_sentence(const char *buffer, char *nmea_sentence);
 bool valid_sentence_code(const char *nmea_sentence);
+void fill_gps_raw_data(const char *buffer, raw_sentence_data_t *gps_raw_data);
 
 void app_main(void)
 {
@@ -64,7 +76,9 @@ static void uart_data_income(void *arg) {
 	uint8_t *data = (uint8_t *) malloc(128);
 	char gps_sentence[128] = { 0 };
 
+
 	while(1) {
+		raw_sentence_data_t gps_raw_data = { 0 };
 		uart_get_buffered_data_len(0, (size_t *) &data_length);
 
 		// em média as linhas válidas possuem ~40 caracteres
@@ -74,7 +88,22 @@ static void uart_data_income(void *arg) {
 			if(len) {
 				bool ret = get_nmea_sentence((const char *) data, gps_sentence);
 				if(ret == true) {
-					printf("(%s)\n", gps_sentence);
+					fill_gps_raw_data(gps_sentence, &gps_raw_data);
+
+					printf("Time Stamp: %s\n"
+							"Validity: %s\n"
+							"Latitude: %s\n"
+							"Latitude Direction %s\n"
+							"Longitude: %s\n"
+							"Longitude Direction: %s\n"
+							"Date Stamp: %s\n"
+							"Checksum: %s\n",
+
+							gps_raw_data.time_stamp, gps_raw_data.validity,
+							gps_raw_data.latitude, gps_raw_data.lat_direction,
+							gps_raw_data.longitude, gps_raw_data.lng_direction,
+							gps_raw_data.date_stamp, gps_raw_data.checksum
+					);
 				}
 
 				memset(data, '\0', 128);
@@ -153,4 +182,75 @@ bool valid_sentence_code(const char *nmea_sentence) {
   }
 
   return false;
+}
+
+uint8_t get_data_in_pos(const char *buffer, uint8_t pos, char *data) {
+	uint8_t comma_count = 0;
+
+	// percorre até chegar no primeiro endereço do campo requerido
+	uint8_t i = 0;
+	if(pos > 0) {
+		for(i = 0; i < 128; i++) {
+			if(comma_count == pos) {
+				break;
+			}
+
+			if(buffer[i] == ',') {
+				comma_count++;
+			}
+		}
+	}
+
+	uint8_t bytes_read = 0;
+
+	for(uint8_t j = i; j < 128; j++) {
+		// TODO: se refatorar a lógica dessa condicional, não vai
+		// ser necessário a função get_checksum();
+		if(buffer[j] == '\0' || buffer[j] == '*') {
+			break;
+		}
+
+		if(buffer[j] != ',') {
+			data[j - i] = buffer[j];
+			bytes_read++;
+			continue;
+		}
+
+		break;
+	}
+
+	return bytes_read;
+}
+
+void get_checksum(const char *buffer, char *checksum) {
+	uint8_t len = strnlen(buffer, 128);
+
+	if(len == 128) {
+		return;
+	}
+
+	if(len > 0) {
+		checksum[0] = buffer[len - 2];
+		checksum[1] = buffer[len - 1];
+		checksum[2] = '\0';
+	}
+}
+
+void fill_gps_raw_data(const char *buffer, raw_sentence_data_t *gps_raw_data) {
+	char tag_id[8] = { 0 };
+
+	get_data_in_pos(buffer, 0, tag_id);
+
+	if(strncmp(tag_id, "$GPRMC", 8) == 0) {
+		// TODO: refatorar, colocar essa seção em um loop
+		get_data_in_pos(buffer, 1, gps_raw_data->time_stamp);
+		get_data_in_pos(buffer, 2, gps_raw_data->validity);
+		get_data_in_pos(buffer, 3, gps_raw_data->latitude);
+		get_data_in_pos(buffer, 4, gps_raw_data->lat_direction);
+		get_data_in_pos(buffer, 5, gps_raw_data->longitude);
+		get_data_in_pos(buffer, 6, gps_raw_data->lng_direction);
+
+		get_data_in_pos(buffer, 9, gps_raw_data->date_stamp);
+		get_checksum(buffer, gps_raw_data->checksum);
+	}
 }
