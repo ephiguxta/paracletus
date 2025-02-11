@@ -5,8 +5,8 @@
 #include "esp_log.h"
 #include "string.h"
 
-#define RXD_PORT 5
-#define TXD_PORT 4
+#define RXD_PORT 20
+#define TXD_PORT 21
 
 typedef struct {
 	uint8_t hour;
@@ -97,7 +97,7 @@ static void uart_data_income(void *arg) {
 							"Longitude: %s\n"
 							"Longitude Direction: %s\n"
 							"Date Stamp: %s\n"
-							"Checksum: %s\n",
+							"Checksum: %s\n\n",
 
 							gps_raw_data.time_stamp, gps_raw_data.validity,
 							gps_raw_data.latitude, gps_raw_data.lat_direction,
