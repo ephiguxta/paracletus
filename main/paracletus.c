@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include "driver/uart.h"
 #include "driver/gpio.h"
 #include "sdkconfig.h"
@@ -47,6 +48,7 @@ static void uart_data_income(void *);
 bool get_nmea_sentence(const char *buffer, char *nmea_sentence);
 bool valid_sentence_code(const char *nmea_sentence);
 void fill_gps_raw_data(const char *buffer, raw_sentence_data_t *gps_raw_data);
+void treat_coordinates_data(raw_sentence_data_t gps_raw_data, gps_t *gps_data);
 
 void app_main(void)
 {
@@ -78,7 +80,9 @@ static void uart_data_income(void *arg) {
 
 
 	while(1) {
+		gps_t* gps_data = malloc(sizeof(gps_t));
 		raw_sentence_data_t gps_raw_data = { 0 };
+
 		uart_get_buffered_data_len(0, (size_t *) &data_length);
 
 		// em média as linhas válidas possuem ~40 caracteres
@@ -89,21 +93,10 @@ static void uart_data_income(void *arg) {
 				bool ret = get_nmea_sentence((const char *) data, gps_sentence);
 				if(ret == true) {
 					fill_gps_raw_data(gps_sentence, &gps_raw_data);
+					treat_coordinates_data(gps_raw_data, gps_data);
 
-					printf("Time Stamp: %s\n"
-							"Validity: %s\n"
-							"Latitude: %s\n"
-							"Latitude Direction %s\n"
-							"Longitude: %s\n"
-							"Longitude Direction: %s\n"
-							"Date Stamp: %s\n"
-							"Checksum: %s\n\n",
-
-							gps_raw_data.time_stamp, gps_raw_data.validity,
-							gps_raw_data.latitude, gps_raw_data.lat_direction,
-							gps_raw_data.longitude, gps_raw_data.lng_direction,
-							gps_raw_data.date_stamp, gps_raw_data.checksum
-					);
+					printf("latitude: %f\n", gps_data->latitude);
+					printf("longitude: %f\n", gps_data->longitude);
 				}
 
 				memset(data, '\0', 128);
@@ -236,6 +229,81 @@ void get_checksum(const char *buffer, char *checksum) {
 	}
 }
 
+uint8_t get_dot_position(const char coord[16]) {
+	uint8_t dot_position = 0;
+
+	for(uint8_t i = 0; i < 16; i++) {
+		if(coord[i] == '.') {
+			dot_position = i;
+		}
+	}
+
+	return dot_position;
+}
+
+void treat_coordinates_data(raw_sentence_data_t gps_raw_data, gps_t *gps_data) {
+
+	uint8_t lat_dot_position = 0;
+	uint8_t lng_dot_position = 0;
+	uint8_t coord_len = 0;
+
+	char degrees[4] = { 0 };
+	float decimal_degrees = 0;
+
+	char minutes[16] = { 0 };
+	float decimal_minutes = 0;
+
+	lat_dot_position = get_dot_position((const char *) gps_raw_data.latitude);
+	coord_len = strnlen(gps_raw_data.latitude, 16);
+
+	for(uint8_t i = 0; i < (lat_dot_position - 2); i++) {
+		degrees[i] = gps_raw_data.latitude[i];
+	}
+
+	uint8_t j = 0;
+	for(uint8_t i = (lat_dot_position - 2); i < coord_len; i++) {
+		minutes[j] = gps_raw_data.latitude[i];
+		j += 1;
+	}
+
+	decimal_degrees = strtod(degrees, NULL);
+	decimal_minutes = strtod(minutes, NULL);
+
+	gps_data->latitude = decimal_degrees + (decimal_minutes / 60);
+
+	if(strncmp(gps_raw_data.lat_direction, "S", 4) == 0) {
+		gps_data->latitude *= -1;
+	}
+
+	memset(degrees, '\0', 4);
+	memset(minutes, '\0', 16);
+	decimal_degrees = 0;
+	decimal_minutes = 0;
+
+	lng_dot_position = get_dot_position((const char *) gps_raw_data.longitude);
+	coord_len = strnlen(gps_raw_data.longitude, 16);
+
+	for(uint8_t i = 0; i < (lng_dot_position - 2); i++) {
+		degrees[i] = gps_raw_data.longitude[i];
+	}
+
+	j = 0;
+	for(uint8_t i = (lng_dot_position - 2); i < coord_len; i++) {
+		minutes[j] = gps_raw_data.longitude[i];
+		j += 1;
+	}
+
+	decimal_degrees = strtod(degrees, NULL);
+	decimal_minutes = strtod(minutes, NULL);
+
+	gps_data->longitude= decimal_degrees + (decimal_minutes / 60);
+
+	if(strncmp(gps_raw_data.lng_direction, "W", 4) == 0) {
+		gps_data->longitude *= -1;
+	}
+
+}
+
 void fill_gps_raw_data(const char *buffer, raw_sentence_data_t *gps_raw_data) {
 	char tag_id[8] = { 0 };
 
@@ -245,7 +313,9 @@ void fill_gps_raw_data(const char *buffer, raw_sentence_data_t *gps_raw_data) {
 		// TODO: refatorar, colocar essa seção em um loop
 		get_data_in_pos(buffer, 1, gps_raw_data->time_stamp);
 		get_data_in_pos(buffer, 2, gps_raw_data->validity);
+
 		get_data_in_pos(buffer, 3, gps_raw_data->latitude);
+
 		get_data_in_pos(buffer, 4, gps_raw_data->lat_direction);
 		get_data_in_pos(buffer, 5, gps_raw_data->longitude);
 		get_data_in_pos(buffer, 6, gps_raw_data->lng_direction);
@@ -253,4 +323,6 @@ void fill_gps_raw_data(const char *buffer, raw_sentence_data_t *gps_raw_data) {
 		get_data_in_pos(buffer, 9, gps_raw_data->date_stamp);
 		get_checksum(buffer, gps_raw_data->checksum);
 	}
+
+	return;
 }
