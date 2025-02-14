@@ -43,9 +43,11 @@ static void nmea_parser_start_gps_uart(void);
 static void uart_data_income(void *);
 
 // GPS
-bool get_nmea_sentence(const char *buffer, char *nmea_sentence);
+bool get_gprmc(const char *buffer, char *nmea_sentence);
 bool valid_sentence_code(const char *nmea_sentence);
 void fill_gps_raw_data(const char *buffer, raw_sentence_data_t *gps_raw_data);
+bool validate_checksum(const char complete_sentence[128], const char checksum[4]);
+void get_checksum(const char *buffer, char *checksum);
 
 void treat_coordinates_data(raw_sentence_data_t gps_raw_data, gps_t *gps_data);
 gps_time_t treat_time(raw_sentence_data_t gps_raw_data, gps_t *gps_data);
@@ -93,10 +95,12 @@ static void uart_data_income(void *arg) {
 
 		// em média as linhas válidas possuem ~40 caracteres
 		if(data_length >= 40) {
-			uint8_t len = uart_read_bytes(0, (char *) data, data_length, 100);
+			uint8_t len = uart_read_bytes(0, (char *) data, 128, 200);
+			uart_flush(0);
 
 			if(len) {
-				bool ret = get_nmea_sentence((const char *) data, gps_sentence);
+				bool ret = get_gprmc((const char *) data, gps_sentence);
+
 				if(ret == true) {
 					fill_gps_raw_data(gps_sentence, &gps_raw_data);
 
@@ -107,9 +111,11 @@ static void uart_data_income(void *arg) {
 
 					fix_date_time(gps_time, gps_date, valid_date_time);
 
-					printf("(%s)\n", valid_date_time);
-					printf("latitude: %f\n", gps_data->latitude);
-					printf("longitude: %f\n", gps_data->longitude);
+					printf("(%s) latitude: %f\tlongitude: %f\n",
+							valid_date_time,
+							gps_data->latitude,
+							gps_data->longitude
+					);
 				}
 
 				memset(data, '\0', 128);
@@ -120,24 +126,27 @@ static void uart_data_income(void *arg) {
 	}
 }
 
-uint8_t digit_pos(const char *buffer, char target) {
+uint8_t digit_pos(const char *buffer, char target, uint8_t *pos) {
 	// função de suporte pra retornar a posição de um dígito
 	// passado no segundo parâmetro
 	//
 
 	uint8_t sign_pos = 0;
 
-	for(uint8_t i = 0; i < 128; i++) {
+	for(uint8_t i = *pos; i < 128; i++) {
 		if(buffer[i] == target) {
 			sign_pos = i;
 			break;
 		}
+
+		*pos = i;
 	}
 
 	return sign_pos;
 }
 
 void fill_buffer(const char *buffer, char *nmea_sentence, uint8_t begin, uint8_t end) {
+
 	for(uint8_t i = begin; i <= (end + 2); i++) {
 		nmea_sentence[i - begin] = buffer[i];
 	}
@@ -146,24 +155,61 @@ void fill_buffer(const char *buffer, char *nmea_sentence, uint8_t begin, uint8_t
 	nmea_sentence[end + 3] = '\0';
 }
 
-bool get_nmea_sentence(const char *buffer, char *nmea_sentence) {
+bool get_gprmc(const char *buffer, char *nmea_sentence) {
+	char checksum[4] = { '\0' };
+	uint8_t read_buffer_pos = 0;
 
 	// procura pelo cifrão
 	uint8_t dollar_sign_pos = 0;
-	dollar_sign_pos = digit_pos(buffer, '$');
+	dollar_sign_pos = digit_pos(buffer, '$', &read_buffer_pos);
 
 	// procura pelo asterístico
 	uint8_t asterisk_pos = 0;
-	asterisk_pos = digit_pos(buffer, '*');
+	asterisk_pos = digit_pos(buffer, '*', &read_buffer_pos);
 
-	// se na sentença não tiver dados ou delimitador de início/fim, ignora a linha
-	if(asterisk_pos <= dollar_sign_pos) {
+	if(dollar_sign_pos > asterisk_pos) {
 		return false;
 	}
 
-	fill_buffer(buffer, nmea_sentence, dollar_sign_pos, asterisk_pos);
+	if(valid_sentence_code(&buffer[dollar_sign_pos]) == true) {
+		// caso for uma sentença completa
+		if((asterisk_pos > 0) && (read_buffer_pos + 3 < 128)) {
 
-	if(valid_sentence_code(nmea_sentence) == true) {
+			checksum[0] = buffer[read_buffer_pos + 2];
+			checksum[1] = buffer[read_buffer_pos + 3];
+
+			char complete_sentence[128];
+
+			for(uint8_t i = dollar_sign_pos; i <= (asterisk_pos + 2); i++) {
+				complete_sentence[i - dollar_sign_pos] = buffer[i];
+			}
+
+			if(validate_checksum(complete_sentence, checksum) == true) {
+				fill_buffer(buffer, nmea_sentence, dollar_sign_pos, asterisk_pos);
+				return true;
+			}
+		}
+	}
+
+	return false;
+}
+
+bool validate_checksum(const char complete_sentence[128], const char checksum[4]) {
+	uint8_t sentence_len = strnlen(complete_sentence, 128);
+
+	uint16_t int_sentence_checksum = 0;
+	char sentence_checksum[4];
+
+	get_checksum(complete_sentence, sentence_checksum);
+
+	uint16_t int_gen_checksum = 0;
+	for(uint8_t i = 1; i < (sentence_len - 3); i++) {
+		int_gen_checksum ^= complete_sentence[i];
+	}
+
+	int_sentence_checksum = strtol(sentence_checksum, NULL, 16);
+
+	if(int_sentence_checksum == int_gen_checksum) {
 		return true;
 	}
 
@@ -177,14 +223,8 @@ bool valid_sentence_code(const char *nmea_sentence) {
     msg_tag[i - 1] = nmea_sentence[i];
   }
 
-  const char valid_tags[6][6] = {
-    "GNGGA", "GPGGA", "GNRMC", "GPRMC", "GPGLL", "GPZDA"
-  };
-
-  for (uint8_t i = 0; i < 4; i++) {
-    if (strncmp(valid_tags[i], msg_tag, 6) == 0) {
-		 return true;
-    }
+  if(strncmp("GPRMC", msg_tag, 6) == 0) {
+	  return true;
   }
 
   return false;
