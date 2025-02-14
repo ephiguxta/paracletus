@@ -390,27 +390,25 @@ gps_date_t treat_date(raw_sentence_data_t gps_raw_data, gps_t *gps_data) {
 }
 
 void fix_date_time(gps_time_t gps_time, gps_date_t gps_date, char *fixed_data) {
-	time_t t;
-	struct tm *tm;
-	struct tm *new_time;
 	time_t epoch;
+	struct tm new_tm;
+	struct tm *tm_ptr;
 
-	time(&t);
-	tm = localtime(&t);
+	struct tm tm = {
+		.tm_year = gps_date.year - 1900,
+		.tm_mon = gps_date.month - 1,
+		.tm_mday =  gps_date.day,
 
-	tm->tm_year = gps_date.year - 1900;
-	tm->tm_mon = gps_date.month - 1;
-	tm->tm_mday =  gps_date.day;
+		.tm_hour = gps_time.hour,
+		.tm_min = gps_time.minute,
+		.tm_sec = gps_time.second
+	};
 
-	tm->tm_hour = gps_time.hour;
-	tm->tm_min = gps_time.minute;
-	tm->tm_sec = gps_time.second;
-
-	epoch = mktime(tm);
+	epoch = mktime(&tm);
 	// 3 horas = 10800 segundos
 	// UTC-3
 	epoch -= 10800;
 
-	new_time = localtime(&epoch);
-	strftime(fixed_data, 32, "%Y-%m-%d %H:%M:%S", new_time);
+	tm_ptr = localtime(&epoch);
+	strftime(fixed_data, 32, "%Y-%m-%d %H:%M:%S", tm_ptr);
 }
