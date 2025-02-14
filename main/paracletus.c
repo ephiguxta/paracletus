@@ -391,7 +391,6 @@ gps_date_t treat_date(raw_sentence_data_t gps_raw_data, gps_t *gps_data) {
 
 void fix_date_time(gps_time_t gps_time, gps_date_t gps_date, char *fixed_data) {
 	time_t epoch;
-	struct tm new_tm;
 	struct tm *tm_ptr;
 
 	struct tm tm = {
