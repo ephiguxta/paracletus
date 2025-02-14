@@ -5,6 +5,7 @@
 #include "sdkconfig.h"
 #include "esp_log.h"
 #include "string.h"
+#include "time.h"
 
 #define RXD_PORT 20
 #define TXD_PORT 21
@@ -13,11 +14,10 @@ typedef struct {
 	uint8_t hour;
 	uint8_t minute;
 	uint8_t second;
-	uint16_t thousand;
 } gps_time_t;
 
 typedef struct {
-	uint8_t year;
+	uint16_t year;
 	uint8_t month;
 	uint8_t day;
 } gps_date_t;
@@ -25,8 +25,6 @@ typedef struct {
 typedef struct {
 	float latitude;
 	float longitude;
-	gps_date_t date;
-	gps_time_t time;
 } gps_t;
 
 typedef struct {
@@ -48,7 +46,11 @@ static void uart_data_income(void *);
 bool get_nmea_sentence(const char *buffer, char *nmea_sentence);
 bool valid_sentence_code(const char *nmea_sentence);
 void fill_gps_raw_data(const char *buffer, raw_sentence_data_t *gps_raw_data);
+
 void treat_coordinates_data(raw_sentence_data_t gps_raw_data, gps_t *gps_data);
+gps_time_t treat_time(raw_sentence_data_t gps_raw_data, gps_t *gps_data);
+gps_date_t treat_date(raw_sentence_data_t gps_raw_data, gps_t *gps_data);
+void fix_date_time(gps_time_t gps_time, gps_date_t gps_date, char *fixed_data);
 
 void app_main(void)
 {
@@ -76,12 +78,16 @@ static void uart_data_income(void *arg) {
 	size_t data_length = 0;
 
 	uint8_t *data = (uint8_t *) malloc(128);
-	char gps_sentence[128] = { 0 };
 
+	char gps_sentence[128] = { 0 };
+	char valid_date_time[32]= { 0 };
 
 	while(1) {
 		gps_t* gps_data = malloc(sizeof(gps_t));
 		raw_sentence_data_t gps_raw_data = { 0 };
+
+		gps_time_t gps_time = { 0 };
+		gps_date_t gps_date = { 0 };
 
 		uart_get_buffered_data_len(0, (size_t *) &data_length);
 
@@ -93,8 +99,15 @@ static void uart_data_income(void *arg) {
 				bool ret = get_nmea_sentence((const char *) data, gps_sentence);
 				if(ret == true) {
 					fill_gps_raw_data(gps_sentence, &gps_raw_data);
+
 					treat_coordinates_data(gps_raw_data, gps_data);
 
+					gps_time = treat_time(gps_raw_data, gps_data);
+					gps_date = treat_date(gps_raw_data, gps_data);
+
+					fix_date_time(gps_time, gps_date, valid_date_time);
+
+					printf("(%s)\n", valid_date_time);
 					printf("latitude: %f\n", gps_data->latitude);
 					printf("longitude: %f\n", gps_data->longitude);
 				}
@@ -325,4 +338,79 @@ void fill_gps_raw_data(const char *buffer, raw_sentence_data_t *gps_raw_data) {
 	}
 
 	return;
+}
+
+gps_time_t treat_time(raw_sentence_data_t gps_raw_data, gps_t *gps_data) {
+	gps_time_t time = { 0 };
+	char buffer[4] = { 0 };
+
+	if (strnlen(gps_raw_data.time_stamp, 16) == 9) {
+		buffer[0] = gps_raw_data.time_stamp[0];
+		buffer[1] = gps_raw_data.time_stamp[1];
+
+		time.hour = atoi(buffer);
+
+		buffer[0] = gps_raw_data.time_stamp[2];
+		buffer[1] = gps_raw_data.time_stamp[3];
+
+		time.minute = atoi(buffer);
+
+		buffer[0] = gps_raw_data.time_stamp[4];
+		buffer[1] = gps_raw_data.time_stamp[5];
+
+		time.second = atoi(buffer);
+	}
+
+	return time;
+}
+
+gps_date_t treat_date(raw_sentence_data_t gps_raw_data, gps_t *gps_data) {
+	gps_date_t date = { 0 };
+	char buffer[4] = { 0 };
+
+	if (strnlen(gps_raw_data.date_stamp, 16) == 6) {
+		buffer[0] = gps_raw_data.date_stamp[0];
+		buffer[1] = gps_raw_data.date_stamp[1];
+
+		date.day = atoi(buffer);
+
+		buffer[0] = gps_raw_data.date_stamp[2];
+		buffer[1] = gps_raw_data.date_stamp[3];
+
+		date.month = atoi(buffer);
+
+		buffer[0] = gps_raw_data.date_stamp[4];
+		buffer[1] = gps_raw_data.date_stamp[5];
+
+		date.year = atoi(buffer);
+		date.year += 2000;
+	}
+
+	return date;
+}
+
+void fix_date_time(gps_time_t gps_time, gps_date_t gps_date, char *fixed_data) {
+	time_t t;
+	struct tm *tm;
+	struct tm *new_time;
+	time_t epoch;
+
+	time(&t);
+	tm = localtime(&t);
+
+	tm->tm_year = gps_date.year - 1900;
+	tm->tm_mon = gps_date.month - 1;
+	tm->tm_mday =  gps_date.day;
+
+	tm->tm_hour = gps_time.hour;
+	tm->tm_min = gps_time.minute;
+	tm->tm_sec = gps_time.second;
+
+	epoch = mktime(tm);
+	// 3 horas = 10800 segundos
+	// UTC-3
+	epoch -= 10800;
+
+	new_time = localtime(&epoch);
+	strftime(fixed_data, 32, "%Y-%m-%d %H:%M:%S", new_time);
 }
