@@ -103,7 +103,6 @@ static void uart_data_income(void *arg) {
 
 				if(ret == true) {
 					fill_gps_raw_data(gps_sentence, &gps_raw_data);
-
 					treat_coordinates_data(gps_raw_data, gps_data);
 
 					gps_time = treat_time(gps_raw_data, gps_data);
@@ -183,6 +182,8 @@ bool get_gprmc(const char *buffer, char *nmea_sentence) {
 			for(uint8_t i = dollar_sign_pos; i <= (asterisk_pos + 2); i++) {
 				complete_sentence[i - dollar_sign_pos] = buffer[i];
 			}
+
+			complete_sentence[asterisk_pos + 3] = '\0';
 
 			if(validate_checksum(complete_sentence, checksum) == true) {
 				fill_buffer(buffer, nmea_sentence, dollar_sign_pos, asterisk_pos);
